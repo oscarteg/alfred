@@ -1,13 +1,9 @@
 name: Docker
 
 on:
-  schedule:
-    - cron: "21 20 * * *"
   push:
     branches: ["main"]
     tags: ["v*.*.*"]
-  pull_request:
-    branches: ["main"]
 
 env:
   REGISTRY: ghcr.io
@@ -24,6 +20,12 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
+
+      - name: Build
+        run: cargo build --verbose
+
+      - name: Run tests
+        run: cargo test --verbose
 
       - name: Install cosign
         if: github.event_name != 'pull_request'
@@ -49,6 +51,10 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           flavor: |
             latest=true
+          tags: |
+            type=ref,event=branch
+            type=sha
+
 
       - name: Build and push Docker image
         id: build-and-push
