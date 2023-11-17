@@ -1,15 +1,17 @@
-use std::env;
-use std::sync::Arc;
-
+use dotenv::dotenv;
 use log::error;
 use serenity::async_trait;
 use serenity::client::bridge::gateway::ShardManager;
 use serenity::framework::standard::macros::{command, group};
-use serenity::framework::standard::{CommandResult, StandardFramework};
+use serenity::framework::standard::{Args, CommandResult, StandardFramework};
 use serenity::model::channel::Message;
+use serenity::model::event::ResumedEvent;
 use serenity::model::id::GuildId;
 use serenity::model::prelude::{Interaction, InteractionResponseType};
+use serenity::model::Permissions;
 use serenity::prelude::*;
+use std::env;
+use std::sync::Arc;
 
 mod commands;
 
@@ -22,7 +24,7 @@ impl TypeMapKey for ShardManagerContainer {
 }
 
 #[group]
-#[commands(quit)]
+#[commands(quit, am_i_admin)]
 struct General;
 
 #[group]
@@ -53,6 +55,10 @@ impl EventHandler for Handler {
             commands
         );
     }
+
+    async fn resume(&self, _ctx: Context, _: ResumedEvent) {
+        println!("Resumed");
+    }
     async fn interaction_create(&self, _ctx: Context, _interaction: Interaction) {
         if let Interaction::ApplicationCommand(command) = _interaction {
             // Run the command
@@ -79,8 +85,11 @@ impl EventHandler for Handler {
 #[tokio::main]
 async fn main() {
     let framework = StandardFramework::new()
-        .configure(|c| c.prefix("~")) // set the bot's prefix to "~"
-        .group(&GENERAL_GROUP);
+        .configure(|c| c.prefix("-")) // set the bot's prefix to "~"
+        .group(&GENERAL_GROUP)
+        .group(&DND_GROUP);
+
+    dotenv().ok();
 
     // Login with a bot token from the environment
     let token = env::var("DISCORD_TOKEN").expect("token");
@@ -120,6 +129,29 @@ async fn main() {
     }
 }
 
+// We could also use
+// #[required_permissions(ADMINISTRATOR)]
+// but that would not let us reply when it fails.
+#[command]
+async fn am_i_admin(ctx: &Context, msg: &Message, _args: Args) -> CommandResult {
+    if let Some(member) = &msg.member {
+        for role in &member.roles {
+            if role
+                .to_role_cached(&ctx.cache)
+                .map_or(false, |r| r.has_permission(Permissions::ADMINISTRATOR))
+            {
+                msg.channel_id.say(&ctx.http, "Yes, you are.").await?;
+
+                return Ok(());
+            }
+        }
+    }
+
+    msg.channel_id.say(&ctx.http, "No, you are not.").await?;
+
+    Ok(())
+}
+
 #[command]
 #[owners_only]
 async fn quit(ctx: &Context, msg: &Message) -> CommandResult {
@@ -139,7 +171,6 @@ async fn quit(ctx: &Context, msg: &Message) -> CommandResult {
 }
 
 #[command]
-
 async fn dnd(ctx: &Context, msg: &Message) -> CommandResult {
     msg.reply(ctx, "dnd!").await?;
 
