@@ -4,6 +4,7 @@ use serenity::all::{CreateInteractionResponse, CreateInteractionResponseMessage}
 use serenity::async_trait;
 use serenity::framework::standard::macros::{command, group};
 use serenity::framework::standard::{Args, CommandResult, Configuration, StandardFramework};
+use serenity::futures::future::ready;
 use serenity::model::application::{Command, Interaction};
 use serenity::model::channel::Message;
 use serenity::model::event::ResumedEvent;
@@ -12,7 +13,11 @@ use serenity::model::id::GuildId;
 use serenity::model::Permissions;
 use serenity::prelude::*;
 use std::env;
+use std::future::Future;
+
+use serenity::futures::ready;
 use std::sync::Arc;
+use tokio::main;
 
 mod commands;
 
@@ -50,8 +55,8 @@ impl EventHandler for Handler {
             println!("Received command interaction: {command:#?}");
 
             let content = match command.data.name.as_str() {
-                "attachmentinput" => Some(commands::convert::run(&command.data.options())),
-                _ => Some("not implemented :(".to_string()),
+                "attachmentinput" => Some(commands::convert::run(&command.data.options()).await),
+                _ => Some(async { "not implemented :(".to_string() }.await),
             };
 
             if let Some(content) = content {
@@ -65,7 +70,7 @@ impl EventHandler for Handler {
     }
 }
 
-#[tokio::main]
+#[main]
 async fn main() {
     dotenv().ok();
 
