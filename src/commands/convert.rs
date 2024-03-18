@@ -1,4 +1,5 @@
 use anyhow::Result;
+use essi_ffmpeg::FFmpeg;
 use serenity::builder::{CreateCommand, CreateCommandOption};
 use serenity::model::application::{CommandOptionType, ResolvedOption, ResolvedValue};
 use std::fs::File;
@@ -17,6 +18,18 @@ pub async fn run(options: &[ResolvedOption<'_>]) -> String {
         fetch_url(attachment.url.clone(), attachment.filename.clone())
             .await
             .unwrap();
+
+        // Build and execute an FFmpeg command
+        let mut ffmpeg = FFmpeg::new()
+            .stderr(std::process::Stdio::inherit())
+            .input_with_file("Goldberg.flac".into())
+            .done()
+            .output_as_file("output_file.aiff".into())
+            .done()
+            .start()
+            .unwrap();
+
+        ffmpeg.wait().unwrap();
 
         format!(
             "Attachment name: {}, attachment size: {}, attachment url: {}",
