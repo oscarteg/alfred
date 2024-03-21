@@ -1,100 +1,118 @@
-use dotenv::dotenv;
-use log::error;
-use serenity::all::{CreateInteractionResponse, CreateInteractionResponseMessage};
-use serenity::async_trait;
-use serenity::framework::standard::macros::{command, group};
-use serenity::framework::standard::{Args, CommandResult, Configuration, StandardFramework};
-use serenity::futures::future::ready;
-use serenity::model::application::{Command, Interaction};
-use serenity::model::channel::Message;
-use serenity::model::event::ResumedEvent;
-use serenity::model::gateway::Ready;
-use serenity::model::id::GuildId;
-use serenity::model::Permissions;
-use serenity::prelude::*;
-use std::env;
-use std::future::Future;
-
-use serenity::futures::ready;
-use std::sync::Arc;
-use tokio::main;
-
 mod commands;
 
-struct Handler;
+use anyhow::Error;
+use dotenv::dotenv;
+use serenity::async_trait;
+use std::env::var;
+use std::sync::Arc;
+use std::time::Duration;
 
-#[async_trait]
-impl EventHandler for Handler {
-    async fn ready(&self, ctx: Context, ready: Ready) {
-        println!("{} is connected!", ready.user.name);
+use poise::serenity_prelude as serenity;
 
-        let guild_id = GuildId::new(
-            env::var("GUILD_ID")
-                .expect("Expected GUILD_ID in environment")
-                .parse()
-                .expect("GUILD_ID must be an integer"),
-        );
+struct Data {}
 
-        let commands = guild_id
-            .set_commands(&ctx.http, vec![commands::convert::register()])
-            .await;
+// Types used by all command functions
 
-        println!("I now have the following guild slash commands: {commands:#?}");
+#[allow(unused)]
+type Context<'a> = poise::Context<'a, Data, Error>;
 
-        let guild_command =
-            Command::create_global_command(&ctx.http, commands::convert::register()).await;
-
-        println!("I created the following global slash command: {guild_command:#?}");
+// Custom user data passed to all command functions
+async fn event_handler(
+    ctx: &serenity::Context,
+    event: &serenity::FullEvent,
+    _framework: poise::FrameworkContext<'_, Data, Error>,
+    data: &Data,
+) -> Result<(), Error> {
+    match event {
+        serenity::FullEvent::Ready { data_about_bot, .. } => {
+            println!("Logged in as {}", data_about_bot.user.name);
+        }
+        serenity::FullEvent::Message { new_message } => {}
+        _ => {}
     }
+    Ok(())
+}
 
-    async fn resume(&self, _ctx: Context, _: ResumedEvent) {
-        println!("Resumed");
-    }
-    async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
-        if let Interaction::Command(command) = interaction {
-            println!("Received command interaction: {command:#?}");
-
-            let content = match command.data.name.as_str() {
-                "attachmentinput" => Some(commands::convert::run(&command.data.options()).await),
-                _ => Some(async { "not implemented :(".to_string() }.await),
-            };
-
-            if let Some(content) = content {
-                let data = CreateInteractionResponseMessage::new().content(content);
-                let builder = CreateInteractionResponse::Message(data);
-                if let Err(why) = command.create_response(&ctx.http, builder).await {
-                    println!("Cannot respond to slash command: {why}");
-                }
+async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
+    // This is our custom error handler
+    // They are many errors that can occur, so we only handle the ones we want to customize
+    // and forward the rest to the default handler
+    match error {
+        poise::FrameworkError::Setup { error, .. } => panic!("Failed to start bot: {:?}", error),
+        poise::FrameworkError::Command { error, ctx, .. } => {
+            println!("Error in command `{}`: {:?}", ctx.command().name, error,);
+        }
+        error => {
+            if let Err(e) = poise::builtins::on_error(error).await {
+                println!("Error while handling error: {}", e)
             }
         }
     }
 }
 
-#[main]
+#[tokio::main]
 async fn main() {
     dotenv().ok();
 
-    // Login with a bot token from the environment
-    let token = env::var("DISCORD_TOKEN").expect("token");
+    // FrameworkOptions contains all of poise's configuration option in one struct
+    // Every option can be omitted to use its default value
+    let options = poise::FrameworkOptions {
+        commands: vec![commands::convert()],
+        prefix_options: poise::PrefixFrameworkOptions {
+            prefix: Some("~".into()),
+            edit_tracker: Some(Arc::new(poise::EditTracker::for_timespan(
+                Duration::from_secs(3600),
+            ))),
+            additional_prefixes: vec![
+                poise::Prefix::Literal("hey bot"),
+                poise::Prefix::Literal("hey bot,"),
+            ],
+            ..Default::default()
+        },
+        // The global error handler for all error cases that may occur
+        on_error: |error| Box::pin(on_error(error)),
+        // This code is run before every command
+        pre_command: |ctx| {
+            Box::pin(async move {
+                println!("Executing command {}...", ctx.command().qualified_name);
+            })
+        },
+        // This code is run after a command if it was successful (returned Ok)
+        post_command: |ctx| {
+            Box::pin(async move {
+                println!("Executed command {}!", ctx.command().qualified_name);
+            })
+        },
+        // Every command invocation must pass this check to continue execution
+        command_check: Some(|ctx| Box::pin(async move { Ok(true) })),
+        // Enforce command checks even for owners (enforced by default)
+        // Set to true to bypass checks, which is useful for testing
+        skip_checks_for_owners: false,
+        event_handler: |ctx, event, framework, data| {
+            Box::pin(event_handler(ctx, event, framework, data))
+        },
+        ..Default::default()
+    };
 
-    let framework = StandardFramework::new();
+    let framework = poise::Framework::builder()
+        .setup(move |ctx, _ready, framework| {
+            Box::pin(async move {
+                println!("Logged in as {}", _ready.user.name);
+                poise::builtins::register_globally(ctx, &framework.options().commands).await?;
+                Ok(Data {})
+            })
+        })
+        .options(options)
+        .build();
 
-    // Initialize the logger to use environment variables.
-    // In this case, a good default is setting the environment variable
-    // `RUST_LOG` to `debug`.
-    tracing_subscriber::fmt::init();
+    let token = var("DISCORD_TOKEN")
+        .expect("Missing `DISCORD_TOKEN` env var, see README for more information.");
+    let intents =
+        serenity::GatewayIntents::non_privileged() | serenity::GatewayIntents::MESSAGE_CONTENT;
 
-    let intents = GatewayIntents::GUILD_MESSAGES
-        | GatewayIntents::DIRECT_MESSAGES
-        | GatewayIntents::MESSAGE_CONTENT;
-
-    let mut client = Client::builder(&token, intents)
+    let client = serenity::ClientBuilder::new(token, intents)
         .framework(framework)
-        .event_handler(Handler)
-        .await
-        .expect("Err creating client");
+        .await;
 
-    if let Err(why) = client.start().await {
-        error!("Client error: {:?}", why);
-    }
+    client.unwrap().start().await.unwrap()
 }
